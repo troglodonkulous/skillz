@@ -1,0 +1,12 @@
+{
+  "name": "skillz",
+  "description": "skillz: a skill for making, testing, and tuning Claude Code skills",
+  "owner": { "name": "troglodonkulous" },
+  "plugins": [
+    {
+      "name": "skillz",
+      "source": ".",
+      "description": "Write, test, and tune Claude Code skills"
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Fake `claude` for offline tests. Never talks to a model.
+
+Env:
+  FAKE_CLAUDE_SCRIPT  path to a JSON file: {"version": str, "rules": [rule, ...]}
+  FAKE_CLAUDE_STATE   dir for per-rule call counters (lock-protected)
+  FAKE_CLAUDE_LOG     file; each call appends one JSON line {argv, cwd, pid}
+
+A rule is {"match": "<prompt substring>" (omit = matches any), "responses": [resp, ...]}.
+The first matching rule wins. Each call to a rule consumes the next response;
+the last one repeats. A response may set:
+  replay            path of a fixture .jsonl to emit verbatim (other fields still
+                    drive exit code, sleep, stderr, writes)
+  skill_call        skill name to invoke via a Skill tool_use (omit = no trigger)
+  skill_partial     true: also emit stream_event partial fragments for it
+  tools_before      tool names called before the skill (e.g. ["Glob"])
+  read_path         emit a Read tool_use of this file_path
+  denial            tool name to report as permission denied (event + result)
+  cost              total_cost_usd (default 0.001)
+  is_error, subtype, exit_code, text
+  writes            {relative path: content} written under cwd
+  sleep             seconds to sleep after init, before the rest
+  stderr            text written to stderr
+  no_result         true: omit the result event
+  hooks             true: emit hook_started/hook_response before init
+"""
+import fcntl
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+argv = sys.argv[1:]
+
+if argv and argv[0] == "--version":
+    script = {}
+    if os.environ.get("FAKE_CLAUDE_SCRIPT"):
+        script = json.loads(Path(os.environ["FAKE_CLAUDE_SCRIPT"]).read_text())
+    print(script.get("version", "2.1.300 (Claude Code)"))
+    sys.exit(0)
+
+
+def log_call():
+    path = os.environ.get("FAKE_CLAUDE_LOG")
+    if not path:
+        return
+    line = json.dumps({"argv": argv, "cwd": os.getcwd(), "pid": os.getpid()}) + "\n"
+    with open(path, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(line)
+        f.flush()
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def flag_values(name):
+    """All values following --name (variadic: until the next --flag) or --name=v."""
+    out = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == name:
+            j = i + 1
+            while j < len(argv) and not argv[j].startswith("--"):
+                out.append(argv[j])
+                j += 1
+            i = j
+            continue
+        if a.startswith(name + "="):
+            out.append(a.split("=", 1)[1])
+        i += 1
+    return out
+
+
+def next_index(rule_i, n):
+    state = os.environ.get("FAKE_CLAUDE_STATE")
+    if not state:
+        return 0
+    Path(state).mkdir(parents=True, exist_ok=True)
+    with open(Path(state) / f"rule-{rule_i}.count", "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        txt = f.read().strip()
+        count = int(txt) if txt else 0
+        f.seek(0)
+        f.truncate()
+        f.write(str(count + 1))
+        f.flush()
+        fcntl.flock(f, fcntl.LOCK_UN)
+    return min(count, n - 1)
+
+
+def pick_response(prompt):
+    script = {}
+    if os.environ.get("FAKE_CLAUDE_SCRIPT"):
+        script = json.loads(Path(os.environ["FAKE_CLAUDE_SCRIPT"]).read_text())
+    for i, rule in enumerate(script.get("rules", [])):
+        m = rule.get("match")
+        if m is None or m in prompt:
+            resps = rule["responses"]
+            return resps[next_index(i, len(resps))]
+    return {}
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def installed_skills():
+    dirs = [Path(os.getcwd())] + [Path(d) for d in flag_values("--add-dir")]
+    names = []
+    for d in dirs:
+        sk = d / ".claude" / "skills"
+        if sk.is_dir():
+            names += sorted(p.name for p in sk.iterdir() if p.is_dir())
+    return names
+
+
+def main():
+    log_call()
+    prompt = argv[argv.index("-p") + 1] if "-p" in argv and argv.index("-p") + 1 < len(argv) else ""
+    resp = pick_response(prompt)
+    cwd = os.getcwd()
+    tools_arg = flag_values("--tools")
+    tools = [t for t in " ".join(tools_arg).replace(",", " ").split() if t]
+    model = (flag_values("--model") or ["fake-model"])[0]
+    mode = (flag_values("--permission-mode") or ["default"])[0]
+
+    if resp.get("hooks"):
+        emit({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart"})
+        emit({"type": "system", "subtype": "hook_response", "hook_name": "SessionStart"})
+
+    for rel, content in (resp.get("writes") or {}).items():
+        p = Path(cwd) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+
+    if resp.get("replay"):
+        if resp.get("sleep"):
+            time.sleep(resp["sleep"])
+        for line in Path(resp["replay"]).read_text().splitlines():
+            sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+    else:
+        emit({"type": "system", "subtype": "init", "cwd": cwd, "model": model,
+              "tools": tools, "mcp_servers": [], "permissionMode": mode,
+              "slash_commands": installed_skills(),
+              "claude_code_version": "2.1.300",
+              "skills": ["update-config", "debug"] + installed_skills()})
+        if resp.get("sleep"):
+            time.sleep(resp["sleep"])
+        n = 0
+        def tool_use(name, inp):
+            nonlocal n
+            n += 1
+            return {"type": "tool_use", "id": f"toolu_fake{n}", "name": name, "input": inp}
+        for t in resp.get("tools_before") or []:
+            emit({"type": "assistant", "message": {"content": [tool_use(t, {"pattern": "*"})]}})
+        if resp.get("read_path"):
+            emit({"type": "assistant", "message": {"content": [tool_use("Read", {"file_path": resp["read_path"]})]}})
+        if resp.get("skill_call"):
+            inp = {"skill": resp["skill_call"]}
+            if resp.get("skill_partial"):
+                emit({"type": "stream_event", "event": {"type": "message_start"}})
+                emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
+                      "content_block": {"type": "tool_use", "id": "toolu_p", "name": "Skill", "input": {}}}})
+                body = json.dumps(inp)
+                for k in range(0, len(body), 4):
+                    emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
+                          "delta": {"type": "input_json_delta", "partial_json": body[k:k + 4]}}})
+                emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}})
+            emit({"type": "assistant", "message": {"content": [tool_use("Skill", inp)]}})
+        denials = []
+        if resp.get("denial"):
+            tu = tool_use(resp["denial"], {})
+            emit({"type": "assistant", "message": {"content": [tu]}})
+            msg = f"Permission to use {resp['denial']} has been denied"
+            emit({"type": "system", "subtype": "permission_denied", "tool_name": resp["denial"],
+                  "tool_use_id": tu["id"], "message": msg})
+            denials.append({"tool_name": resp["denial"], "tool_use_id": tu["id"], "tool_input": {}})
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": resp.get("text", "ok")}]}})
+        if not resp.get("no_result"):
+            emit({"type": "result", "subtype": resp.get("subtype", "success"),
+                  "is_error": bool(resp.get("is_error", False)),
+                  "duration_ms": 10, "duration_api_ms": 5, "num_turns": 1,
+                  "result": resp.get("text", "ok"),
+                  "total_cost_usd": resp.get("cost", 0.001),
+                  "usage": {"input_tokens": 10, "output_tokens": 20,
+                            "cache_creation_input_tokens": 30, "cache_read_input_tokens": 40},
+                  "permission_denials": denials,
+                  "terminal_reason": "completed"})
+
+    if resp.get("stderr"):
+        sys.stderr.write(resp["stderr"])
+        sys.stderr.flush()
+    sys.exit(int(resp.get("exit_code", 0)))
+
+
+main()

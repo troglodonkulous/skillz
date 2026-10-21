@@ -1,0 +1,14 @@
+{
+  "configuration": "with_skill",
+  "exit_code": 0,
+  "stderr_tail": "",
+  "is_error": false,
+  "permission_denials": [],
+  "permission_denied_events": 0,
+  "init": {
+    "skills": [
+      "demo-skill"
+    ],
+    "model": "claude-test-1"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "eval_name": "preserves-formulas",
+  "prompt": "p",
+  "expected_output": "o",
+  "files": [],
+  "expectations": [
+    "a"
+  ],
+  "baseline_kind": "no_skill",
+  "baseline_label": "no skill"
+}

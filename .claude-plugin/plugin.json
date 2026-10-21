@@ -1,0 +1,7 @@
+{
+  "name": "skillz",
+  "description": "Write, test, and tune Claude Code skills: authoring, baseline evals, comparison, and trigger optimization.",
+  "author": { "name": "troglodonkulous" },
+  "homepage": "https://github.com/troglodonkulous/skillz",
+  "repository": "https://github.com/troglodonkulous/skillz"
+}

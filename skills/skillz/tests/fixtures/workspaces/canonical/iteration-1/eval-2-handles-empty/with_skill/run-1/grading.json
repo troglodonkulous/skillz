@@ -1,0 +1,42 @@
+{
+  "expectations": [
+    {
+      "text": "check 0",
+      "passed": true,
+      "evidence": "e"
+    },
+    {
+      "text": "check 1",
+      "passed": true,
+      "evidence": "e"
+    },
+    {
+      "text": "check 2",
+      "passed": true,
+      "evidence": "e"
+    },
+    {
+      "text": "check 3",
+      "passed": true,
+      "evidence": "e"
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 0,
+    "total": 4,
+    "pass_rate": 1.0
+  },
+  "execution_metrics": {
+    "total_tool_calls": 4,
+    "errors_encountered": 0,
+    "output_chars": 99999
+  },
+  "user_notes_summary": {
+    "uncertainties": [
+      "u"
+    ],
+    "needs_review": [],
+    "workarounds": []
+  }
+}
