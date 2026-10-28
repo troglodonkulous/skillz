@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "skillz",
-      "source": ".",
+      "source": "./",
       "description": "Write, test, and tune Claude Code skills"
     }
   ]
